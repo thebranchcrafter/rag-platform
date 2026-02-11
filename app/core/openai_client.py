@@ -1,5 +1,6 @@
 from openai import AsyncOpenAI
 from app.core.config import settings
+from typing import Optional
 import logging
 
 logger = logging.getLogger(__name__)
