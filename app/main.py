@@ -94,11 +94,11 @@ async def startup_event():
         except Exception as e:
             logger.warning(f"Could not create tsvector index (may already exist): {e}")
         
-        # Update existing chunks to populate tsvector if needed
+        # Update existing chunks to populate tsvector if needed (Spanish for better Spanish text search)
         try:
             result = await conn.execute(text("""
                 UPDATE document_chunks 
-                SET content_tsv = to_tsvector('english', content)
+                SET content_tsv = to_tsvector('spanish', content)
                 WHERE content_tsv IS NULL AND content IS NOT NULL
             """))
             rows_updated = result.rowcount

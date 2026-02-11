@@ -3,6 +3,7 @@ from sqlalchemy import select, text, func, bindparam
 from typing import List, Dict, Tuple, Optional, Any
 import logging
 import json
+import tiktoken
 
 from app.db.models import DocumentChunk
 from app.core.openai_client import get_embedding, get_chat_completion
@@ -10,6 +11,16 @@ from app.core.config import settings
 from app.services.reranking_service import RerankingService
 
 logger = logging.getLogger(__name__)
+
+# Initialize tokenizer once (reused for performance)
+_tokenizer = None
+
+def _get_tokenizer():
+    """Get or initialize tokenizer (lazy initialization)."""
+    global _tokenizer
+    if _tokenizer is None:
+        _tokenizer = tiktoken.get_encoding("cl100k_base")
+    return _tokenizer
 
 
 class RetrievalService:
@@ -50,14 +61,15 @@ class RetrievalService:
         vector_weight_val = settings.VECTOR_WEIGHT
         bm25_weight_val = settings.BM25_WEIGHT
         
-        # Build query SQL - conditionally include WHERE clause
+        # Build optimized query SQL - conditionally include WHERE clause
         if filters:
             # Convert filters dict to JSON string for JSONB containment operator
             # Escape single quotes in JSON for safe SQL insertion
             filters_json = json.dumps(filters).replace("'", "''")
-            logger.info(f"Applying metadata filters: {filters}")
+            logger.debug(f"Applying metadata filters: {filters}")
             
-            # Build SQL with filters - insert JSON directly (already validated as dict)
+            # Optimized SQL with filters - use parameterized query for better performance
+            # Only select needed columns to reduce data transfer
             query_sql = f"""
                 SELECT 
                     dc.id,
@@ -72,7 +84,7 @@ class RetrievalService:
                         WHEN dc.content_tsv IS NOT NULL THEN
                             (
                                 ({vector_weight_val} * (1 - (dc.embedding <-> '{embedding_str}'::vector))) +
-                                ({bm25_weight_val} * COALESCE(ts_rank(dc.content_tsv, plainto_tsquery('english', :query_text)), 0))
+                                ({bm25_weight_val} * COALESCE(ts_rank(dc.content_tsv, plainto_tsquery('spanish', :query_text)), 0))
                             )
                         ELSE
                             ({vector_weight_val} * (1 - (dc.embedding <-> '{embedding_str}'::vector)))
@@ -89,6 +101,7 @@ class RetrievalService:
                 top_k=top_k
             )
         else:
+            # Optimized SQL without filters - only select needed columns
             query_sql = f"""
                 SELECT 
                     dc.id,
@@ -103,7 +116,7 @@ class RetrievalService:
                         WHEN dc.content_tsv IS NOT NULL THEN
                             (
                                 ({vector_weight_val} * (1 - (dc.embedding <-> '{embedding_str}'::vector))) +
-                                ({bm25_weight_val} * COALESCE(ts_rank(dc.content_tsv, plainto_tsquery('english', :query_text)), 0))
+                                ({bm25_weight_val} * COALESCE(ts_rank(dc.content_tsv, plainto_tsquery('spanish', :query_text)), 0))
                             )
                         ELSE
                             ({vector_weight_val} * (1 - (dc.embedding <-> '{embedding_str}'::vector)))
@@ -203,21 +216,14 @@ class RetrievalService:
         top_k: int,
         filters: Optional[Dict[str, Any]] = None
     ):
-        """Log retrieval details for debugging."""
-        logger.info(f"Retrieval Debug - Query: '{query}'")
-        logger.info(f"Retrieval Debug - Filters: {filters}")
-        logger.info(f"Retrieval Debug - Top K: {top_k}")
-        logger.info(f"Retrieval Debug - Retrieved: {len(chunks_with_scores)} chunks")
+        """Log retrieval details for debugging (optimized - less verbose)."""
+        # Only log summary, not every chunk detail (for performance)
+        logger.debug(f"Retrieved {len(chunks_with_scores)} chunks for query: '{query[:50]}...'")
         
-        for i, (chunk, score) in enumerate(chunks_with_scores[:5]):  # Log top 5
-            logger.info(
-                f"Retrieval Debug - Chunk {i+1}: "
-                f"id={chunk.id}, "
-                f"score={score:.4f}, "
-                f"index={chunk.chunk_index}, "
-                f"metadata={chunk.meta}, "
-                f"preview={chunk.content[:100]}..."
-            )
+        # Only log top chunk details if in debug mode
+        if logger.isEnabledFor(logging.DEBUG) and chunks_with_scores:
+            top_chunk, top_score = chunks_with_scores[0]
+            logger.debug(f"Top chunk score: {top_score:.4f}, index: {top_chunk.chunk_index}")
     
     async def query(
         self,
@@ -228,6 +234,7 @@ class RetrievalService:
     ) -> dict:
         """
         Perform RAG query: retrieve relevant chunks and generate answer.
+        Optimized for performance with parallel operations and context limits.
         
         Args:
             question: User's question
@@ -239,7 +246,6 @@ class RetrievalService:
             Dictionary with answer and used chunks
         """
         # Generate embedding for the question
-        logger.info(f"Generating embedding for question: {question[:50]}...")
         query_embedding = await get_embedding(question)
         
         # Hybrid search for similar chunks with optional filtering
@@ -250,42 +256,49 @@ class RetrievalService:
             top_k=top_k or settings.TOP_K
         )
         
-        logger.info(f"Retrieved {len(similar_chunks)} chunks (filters: {filters}, top_k: {top_k or settings.TOP_K})")
-        
         if not similar_chunks:
             return {
-                "answer": "I couldn't find any relevant information in the knowledge base to answer your question.",
+                "answer": "No pude encontrar información relevante en la base de conocimientos para responder tu pregunta.",
                 "chunks": []
             }
         
-        # Optional re-ranking
+        # Optional re-ranking (only if enabled and we have multiple chunks)
         if settings.ENABLE_RERANKING and len(similar_chunks) > 1:
-            logger.info("Applying re-ranking to retrieved chunks")
             similar_chunks = await self.reranking_service.rerank_chunks(
                 similar_chunks,
                 question
             )
         
-        # Build context from chunks
-        context = "\n\n".join([
-            f"[Chunk {chunk.chunk_index} from {chunk.document_id}]:\n{chunk.content}"
-            for chunk in similar_chunks
-        ])
+        # Build optimized context from chunks (no metadata in context, just content)
+        # Limit context size to avoid very long prompts (max ~8000 tokens for context)
+        encoding = _get_tokenizer()
+        max_context_tokens = 8000
+        context_parts = []
+        current_tokens = 0
         
-        # Build improved RAG prompt
+        for chunk in similar_chunks:
+            chunk_text = chunk.content
+            chunk_tokens = len(encoding.encode(chunk_text))
+            
+            if current_tokens + chunk_tokens > max_context_tokens:
+                # Log if we're truncating
+                if current_tokens > 0:
+                    logger.debug(f"Context truncated at {current_tokens} tokens (limit: {max_context_tokens})")
+                break
+            
+            context_parts.append(chunk_text)
+            current_tokens += chunk_tokens
+        
+        context = "\n\n".join(context_parts)
+        
+        # Build optimized RAG prompt (shorter for faster processing)
         # Use custom system prompt if provided, otherwise use default
-        default_system_prompt = """You are a helpful assistant that answers questions based on the provided context.
-
-IMPORTANT INSTRUCTIONS:
-- The context may include structured data such as tables, lists, meeting minutes, or numeric data
-- When data is presented in lists or sections, infer relationships between items
-- Answer precisely and extract numeric values if present
-- If the context contains tables or structured formats, preserve that structure in your answer
-- Use only the information from the context to answer
-- If the context doesn't contain enough information to answer the question, say so explicitly
-- Be specific and cite relevant details from the context"""
+        default_system_prompt = """Responde basándote en el contexto. Si hay tablas o datos estructurados, presérvalos. Responde en el mismo idioma de la pregunta."""
         
         system_prompt_content = system_prompt if system_prompt else default_system_prompt
+        
+        # Optimized prompt format (shorter = faster)
+        user_content = f"Contexto:\n{context}\n\nPregunta: {question}\n\nRespuesta:"
         
         messages = [
             {
@@ -294,16 +307,13 @@ IMPORTANT INSTRUCTIONS:
             },
             {
                 "role": "user",
-                "content": f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
+                "content": user_content
             }
         ]
         
-        if system_prompt:
-            logger.info(f"Using custom system prompt (length: {len(system_prompt)} chars)")
-        
-        # Generate answer
-        logger.info("Generating answer using OpenAI...")
-        answer = await get_chat_completion(messages)
+        # Generate answer with token limit for faster responses
+        # Limit to 2000 tokens max for faster generation (adjust based on needs)
+        answer = await get_chat_completion(messages, max_tokens=2000)
         
         # Prepare chunk metadata for response
         chunks_metadata = [

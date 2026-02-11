@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, ValidationError
 from typing import Optional, Dict, Any
 import logging
 import json
-import PyPDF2
+import pdfplumber
 import io
 
 from app.db.session import get_db
@@ -16,20 +16,112 @@ router = APIRouter()
 
 
 def extract_text_from_pdf(file_content: bytes) -> str:
-    """Extract text from PDF file."""
+    """
+    Extract text from PDF file with improved table extraction.
+    
+    Uses pdfplumber for better table detection and extraction.
+    Tables are formatted as structured text for better searchability.
+    Optimized to only extract tables when they exist.
+    """
     try:
         pdf_file = io.BytesIO(file_content)
-        pdf_reader = PyPDF2.PdfReader(pdf_file)
-        text = ""
-        for page in pdf_reader.pages:
-            text += page.extract_text() + "\n"
-        return text.strip()
+        text_parts = []
+        
+        with pdfplumber.open(pdf_file) as pdf:
+            for page_num, page in enumerate(pdf.pages, 1):
+                # Extract regular text first
+                page_text = page.extract_text()
+                
+                # Only extract tables if page has text (optimization)
+                # This avoids expensive table extraction on pages without tables
+                if page_text:
+                    text_parts.append(page_text)
+                    
+                    # Check if page likely contains tables (heuristic: look for table-like patterns in text)
+                    # Only extract tables if we detect potential table indicators
+                    has_table_indicators = any(
+                        keyword in page_text for keyword in 
+                        ['|', '\t', 'CH ', 'COEF', 'CUOTA', 'Tabla', 'CHALET']
+                    )
+                    
+                    if has_table_indicators:
+                        # Extract tables and format them
+                        tables = page.extract_tables()
+                        if tables:
+                            for table_num, table in enumerate(tables, 1):
+                                if table and len(table) > 0:
+                                    # Format table as structured text
+                                    table_text = format_table_as_text(table)
+                                    if table_text:
+                                        text_parts.append(f"\n\n[Tabla {table_num}]\n{table_text}\n")
+                
+                # Add page separator only if we have content
+                if text_parts:
+                    text_parts.append("\n")
+        
+        full_text = "\n".join(text_parts).strip()
+        
+        if not full_text:
+            logger.warning("No text extracted from PDF")
+            # Fallback: try to extract at least something
+            pdf_file.seek(0)
+            with pdfplumber.open(pdf_file) as pdf:
+                for page in pdf.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        full_text += page_text + "\n"
+        
+        return full_text.strip()
     except Exception as e:
         logger.error(f"Error extracting text from PDF: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to extract text from PDF: {str(e)}"
         )
+
+
+def format_table_as_text(table: list) -> str:
+    """
+    Format a table (list of lists) as readable text.
+    
+    Args:
+        table: List of rows, where each row is a list of cells
+        
+    Returns:
+        Formatted table as string optimized for searchability
+    """
+    if not table or len(table) == 0:
+        return ""
+    
+    # Filter out empty rows
+    table = [row for row in table if any(cell and str(cell).strip() for cell in row)]
+    
+    if not table:
+        return ""
+    
+    # Normalize table: ensure all rows have the same number of columns
+    max_cols = max(len(row) for row in table) if table else 0
+    normalized_table = []
+    for row in table:
+        normalized_row = [str(cell).strip() if cell else "" for cell in row]
+        # Pad row to max_cols
+        while len(normalized_row) < max_cols:
+            normalized_row.append("")
+        normalized_table.append(normalized_row)
+    
+    if not normalized_table:
+        return ""
+    
+    formatted_lines = []
+    
+    # Single optimized format: row-by-row with pipe separator
+    # This format is both structured and searchable
+    for row in normalized_table:
+        if any(cell.strip() for cell in row):
+            row_text = " | ".join(cell if cell else "" for cell in row)
+            formatted_lines.append(row_text)
+    
+    return "\n".join(formatted_lines)
 
 
 def extract_text_from_txt(file_content: bytes) -> str:

@@ -26,10 +26,11 @@ class ChunkingService:
         Chunk text with structure-aware strategy.
         
         Strategy:
-        1. Split by double newline (paragraphs)
-        2. Preserve paragraph integrity
-        3. Don't cut sentences in half
-        4. If chunk too long, apply token-based split with overlap
+        1. Identify and preserve tables (marked with [Tabla X])
+        2. Split by double newline (paragraphs)
+        3. Preserve paragraph integrity
+        4. Don't cut sentences in half
+        5. If chunk too long, apply token-based split with overlap
         
         Args:
             text: Text to chunk
@@ -40,9 +41,55 @@ class ChunkingService:
         if not text.strip():
             return []
         
-        # Step 1: Split by double newline to preserve paragraphs
-        paragraphs = re.split(r'\n\s*\n', text)
-        paragraphs = [p.strip() for p in paragraphs if p.strip()]
+        # Step 1: Identify and preserve tables
+        # Tables are marked with [Tabla X] pattern
+        # Split text preserving table blocks
+        parts = []
+        current_part = []
+        lines = text.split('\n')
+        in_table = False
+        table_lines = []
+        
+        for line in lines:
+            # Detect table start
+            if re.match(r'\[Tabla\s+\d+\]', line, re.IGNORECASE):
+                # Save current part if exists
+                if current_part:
+                    parts.append('\n'.join(current_part))
+                    current_part = []
+                # Start collecting table
+                in_table = True
+                table_lines = [line]
+            elif in_table:
+                table_lines.append(line)
+                # Check if we've reached end of table (empty line or new section)
+                if line.strip() == '' and len(table_lines) > 3:
+                    # End of table detected
+                    parts.append('\n'.join(table_lines))
+                    table_lines = []
+                    in_table = False
+                elif re.match(r'\[Tabla\s+\d+\]', line, re.IGNORECASE):
+                    # New table starts, save previous one
+                    if len(table_lines) > 1:
+                        parts.append('\n'.join(table_lines[:-1]))
+                    table_lines = [line]
+            else:
+                current_part.append(line)
+        
+        # Handle remaining content
+        if table_lines:
+            parts.append('\n'.join(table_lines))
+        if current_part:
+            parts.append('\n'.join(current_part))
+        
+        # If no tables found, use original paragraph splitting
+        if len(parts) == 1 and not re.search(r'\[Tabla\s+\d+\]', parts[0], re.IGNORECASE):
+            # Step 2: Split by double newline to preserve paragraphs
+            paragraphs = re.split(r'\n\s*\n', text)
+            paragraphs = [p.strip() for p in paragraphs if p.strip()]
+        else:
+            # Use the parts we identified (may include tables and paragraphs)
+            paragraphs = [p.strip() for p in parts if p.strip()]
         
         if not paragraphs:
             # Fallback: treat entire text as one paragraph

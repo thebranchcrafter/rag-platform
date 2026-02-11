@@ -76,11 +76,11 @@ class DocumentService:
             self.db.add(chunk)
             await self.db.flush()  # Flush to get chunk ID
             
-            # Populate tsvector using PostgreSQL to_tsvector
+            # Populate tsvector using PostgreSQL to_tsvector (Spanish for better Spanish text search)
             await self.db.execute(
                 text("""
                     UPDATE document_chunks 
-                    SET content_tsv = to_tsvector('english', content)
+                    SET content_tsv = to_tsvector('spanish', content)
                     WHERE id = :chunk_id
                 """),
                 {"chunk_id": chunk.id}
