@@ -1,0 +1,21 @@
+version: '3.8'
+
+# Production docker-compose override
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
+
+services:
+  api:
+    # Override volumes - no hot reload in production
+    volumes: []
+    # Production command - no reload, multiple workers for better performance
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4 --no-access-log
+    # Production environment (can override defaults)
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://rag_user:rag_password@postgres:5432/rag_db
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL_EMBEDDING=${OPENAI_MODEL_EMBEDDING:-text-embedding-3-small}
+      - OPENAI_MODEL_CHAT=${OPENAI_MODEL_CHAT:-gpt-4o-mini}
+      - CHUNK_SIZE=${CHUNK_SIZE:-1000}
+      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-200}
+      - TOP_K=${TOP_K:-5}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}

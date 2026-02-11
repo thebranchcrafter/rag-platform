@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG Service - Document Library</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="header-content">
+                <h1 class="title">
+                    <span class="icon">📚</span>
+                    Document Library
+                </h1>
+                <p class="subtitle">Manage your RAG knowledge base documents</p>
+            </div>
+            <div class="header-actions">
+                <button class="btn btn-secondary" onclick="refreshDocuments()">
+                    <span class="btn-icon">🔄</span>
+                    Refresh
+                </button>
+                <button class="btn btn-primary" onclick="showUploadModal()">
+                    <span class="btn-icon">📤</span>
+                    Upload Document
+                </button>
+            </div>
+        </header>
+
+        <div class="stats-bar">
+            <div class="stat-card">
+                <div class="stat-value" id="total-docs">0</div>
+                <div class="stat-label">Total Documents</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="total-chunks">0</div>
+                <div class="stat-label">Total Chunks</div>
+            </div>
+        </div>
+
+        <div class="content">
+            <div id="loading" class="loading hidden">
+                <div class="spinner"></div>
+                <p>Loading documents...</p>
+            </div>
+
+            <div id="error" class="error hidden"></div>
+
+            <div id="documents-grid" class="documents-grid">
+                <!-- Documents will be inserted here -->
+            </div>
+
+            <div id="empty-state" class="empty-state hidden">
+                <div class="empty-icon">📄</div>
+                <h2>No documents yet</h2>
+                <p>Upload your first document to get started</p>
+                <button class="btn btn-primary" onclick="showUploadModal()">
+                    <span class="btn-icon">📤</span>
+                    Upload Document
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload Modal -->
+    <div id="upload-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Upload Document</h2>
+                <button class="modal-close" onclick="hideUploadModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="upload-form" onsubmit="handleUpload(event)">
+                    <div class="form-group">
+                        <label class="form-label">
+                            Select File <span class="required">*</span>
+                        </label>
+                        <div class="file-drop-zone" id="drop-zone">
+                            <span class="file-icon">📎</span>
+                            <p>Drag and drop a file here, or click to select</p>
+                            <p class="file-hint">Supports PDF and TXT files</p>
+                        </div>
+                        <input type="file" id="file-input" accept=".pdf,.txt" style="position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0; opacity: 0;">
+                    </div>
+                    <div class="form-group">
+                        <label for="metadata-input" class="form-label">
+                            Metadata (JSON) <span class="required">*</span>
+                        </label>
+                        <textarea 
+                            id="metadata-input" 
+                            class="form-control" 
+                            rows="4" 
+                            placeholder='{"community_id": "123", "category": "meetings"}' 
+                            required
+                        >{}</textarea>
+                        <p class="form-hint">Enter metadata as JSON object. Example: {"tenant_id": "acme", "category": "docs"}</p>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" onclick="hideUploadModal()">Cancel</button>
+                        <button type="submit" class="btn btn-primary" id="upload-btn">
+                            <span class="btn-icon">📤</span>
+                            Upload
+                        </button>
+                    </div>
+                </form>
+                <div id="upload-progress" class="upload-progress hidden">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                    <p class="progress-text">Uploading and processing...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>

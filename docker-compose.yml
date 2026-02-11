@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: rag_postgres
+    environment:
+      POSTGRES_USER: rag_user
+      POSTGRES_PASSWORD: rag_password
+      POSTGRES_DB: rag_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_user -d rag_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag_api
+    environment:
+      DATABASE_URL: postgresql+asyncpg://rag_user:rag_password@postgres:5432/rag_db
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL_EMBEDDING: ${OPENAI_MODEL_EMBEDDING:-text-embedding-3-small}
+      OPENAI_MODEL_CHAT: ${OPENAI_MODEL_CHAT:-gpt-4o-mini}
+      CHUNK_SIZE: ${CHUNK_SIZE:-1200}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
+      CHUNK_MAX_TOKENS: ${CHUNK_MAX_TOKENS:-1200}
+      TOP_K: ${TOP_K:-10}
+      VECTOR_WEIGHT: ${VECTOR_WEIGHT:-0.7}
+      BM25_WEIGHT: ${BM25_WEIGHT:-0.3}
+      ENABLE_RERANKING: ${ENABLE_RERANKING:-false}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+    ports:
+      - "8765:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Mount app directory for development (hot reload)
+      - ./app:/app/app
+    # Development command with hot reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - rag-network
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  rag-network:
+    driver: bridge
