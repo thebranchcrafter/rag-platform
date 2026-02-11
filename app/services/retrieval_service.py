@@ -249,11 +249,24 @@ class RetrievalService:
         query_embedding = await get_embedding(question)
         
         # Hybrid search for similar chunks with optional filtering
+        # Increase top_k slightly for queries about specific points/sections to ensure we get relevant chunks
+        effective_top_k = top_k or settings.TOP_K
+        # Expand query text for point-specific queries to improve retrieval
+        expanded_query_text = question
+        
+        # If query mentions numbered points/sections, retrieve more chunks and expand query
+        if any(keyword in question.lower() for keyword in ['punto', 'puntos', 'sección', 'apartado', 'tema']):
+            effective_top_k = max(effective_top_k, 15)  # Retrieve at least 15 chunks for point-specific queries
+            # Expand query to include variations that might appear in the document
+            # This helps with full-text search (BM25) to find "PUNTO 3", "Punto 3", etc.
+            expanded_query_text = f"{question} PUNTO punto"
+            logger.debug(f"Increased top_k to {effective_top_k} and expanded query for point-specific query")
+        
         similar_chunks = await self.search_similar_chunks(
             query_embedding,
-            query_text=question,
+            query_text=expanded_query_text,
             filters=filters,
-            top_k=top_k or settings.TOP_K
+            top_k=effective_top_k
         )
         
         if not similar_chunks:
@@ -293,12 +306,20 @@ class RetrievalService:
         
         # Build optimized RAG prompt (shorter for faster processing)
         # Use custom system prompt if provided, otherwise use default
-        default_system_prompt = """Responde basándote en el contexto. Si hay tablas o datos estructurados, presérvalos. Responde en el mismo idioma de la pregunta."""
+        default_system_prompt = """Responde basándote ÚNICAMENTE en el contexto proporcionado. 
+
+INSTRUCCIONES:
+- Si el contexto contiene información sobre el tema preguntado, responde con esa información
+- Si el contexto menciona puntos numerados (PUNTO 1, PUNTO 2, PUNTO 3, etc.), busca específicamente el punto mencionado en la pregunta
+- Si hay tablas o datos estructurados, presérvalos en tu respuesta
+- Si el contexto NO contiene la información solicitada, di explícitamente que no hay información disponible en el contexto
+- Responde en el mismo idioma de la pregunta
+- Sé específico y cita detalles del contexto cuando sea relevante"""
         
         system_prompt_content = system_prompt if system_prompt else default_system_prompt
         
-        # Optimized prompt format (shorter = faster)
-        user_content = f"Contexto:\n{context}\n\nPregunta: {question}\n\nRespuesta:"
+        # Optimized prompt format with explicit instruction to search for numbered points
+        user_content = f"Contexto del documento:\n{context}\n\nPregunta: {question}\n\nIMPORTANTE: Si la pregunta menciona un punto numerado (ej: 'punto 3', 'PUNTO 3'), busca específicamente ese punto en el contexto. Responde con la información encontrada o indica claramente si no está disponible en el contexto.\n\nRespuesta:"
         
         messages = [
             {
