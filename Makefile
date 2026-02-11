@@ -1,4 +1,4 @@
-.PHONY: help build up down restart logs shell db-shell clean install run test format lint migrate prod-build prod-up
+.PHONY: help build up down restart logs shell db-shell clean install run test format lint migrate prod-build prod-up db-reset db-drop
 
 # Default target
 help:
@@ -17,6 +17,8 @@ help:
 	@echo "  make format      - Format code with black (if installed)"
 	@echo "  make lint        - Lint code with flake8 (if installed)"
 	@echo "  make migrate     - Run database migrations"
+	@echo "  make db-reset    - Drop all tables and reset database (keeps container running)"
+	@echo "  make db-drop     - Completely remove database volume (stops services)"
 	@echo "  make prod-build  - Build production images"
 	@echo "  make prod-up     - Start services in production mode"
 
@@ -88,6 +90,23 @@ lint:
 # Database migrations
 migrate:
 	docker-compose exec api python -m alembic upgrade head
+
+# Database reset - Drop all tables (keeps container and volume)
+db-reset:
+	@echo "⚠️  WARNING: This will delete ALL data from the database!"
+	@echo "Dropping all tables..."
+	@docker-compose exec -T postgres psql -U rag_user -d rag_db -c "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO rag_user; GRANT ALL ON SCHEMA public TO public;"
+	@echo "✅ Database reset complete. Run 'make migrate' to recreate tables."
+
+# Database drop - Completely remove database volume (stops services)
+db-drop:
+	@echo "⚠️  WARNING: This will completely remove the database volume and ALL data!"
+	@echo "Stopping services and removing database volume..."
+	@docker-compose down -v
+	@for vol in $$(docker volume ls -q | grep -E "(rag-platform|postgres_data)"); do \
+		docker volume rm $$vol 2>/dev/null || true; \
+	done
+	@echo "✅ Database volume removed. Run 'make up' to recreate."
 
 # Quick start
 start: build up
