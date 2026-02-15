@@ -146,8 +146,17 @@ class DocumentIntelligenceService:
                     f"coverage={text_coverage:.2%}, pages={estimated_pages}, layout={layout_complexity}")
         logger.debug(f"[Strategy Decision] Cloud OCR enabled: {settings.ENABLE_CLOUD_OCR}, provider: {settings.CLOUD_OCR_PROVIDER}")
         
-        # Check if Cloud OCR is available and should be prioritized
-        cloud_ocr_available = settings.ENABLE_CLOUD_OCR
+        # Check if Cloud OCR is available and properly configured
+        cloud_ocr_available = False
+        if settings.ENABLE_CLOUD_OCR:
+            # Check if credentials are configured
+            if settings.CLOUD_OCR_PROVIDER.lower() == "aws":
+                cloud_ocr_available = bool(settings.AWS_ACCESS_KEY_ID and settings.AWS_SECRET_ACCESS_KEY)
+            elif settings.CLOUD_OCR_PROVIDER.lower() == "azure":
+                cloud_ocr_available = bool(settings.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT and settings.AZURE_DOCUMENT_INTELLIGENCE_KEY)
+            
+            if not cloud_ocr_available:
+                logger.warning(f"[Strategy Decision] Cloud OCR enabled but credentials not configured for provider: {settings.CLOUD_OCR_PROVIDER}")
         
         # Native digital formats always use local parser
         if file_type in ["docx", "html", "txt"]:

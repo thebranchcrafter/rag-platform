@@ -46,6 +46,15 @@ class CloudOCRService:
         logger.debug(f"[Cloud OCR] AWS available: {AWS_AVAILABLE}")
         logger.debug(f"[Cloud OCR] Azure available: {AZURE_AVAILABLE}")
         
+        # Debug: Log credential status (without exposing secrets)
+        if self.provider == "aws":
+            has_access_key = bool(settings.AWS_ACCESS_KEY_ID)
+            has_secret_key = bool(settings.AWS_SECRET_ACCESS_KEY)
+            logger.debug(f"[Cloud OCR] AWS credentials status:")
+            logger.debug(f"  - AWS_ACCESS_KEY_ID present: {has_access_key} ({'configured' if has_access_key else 'NOT configured'})")
+            logger.debug(f"  - AWS_SECRET_ACCESS_KEY present: {has_secret_key} ({'configured' if has_secret_key else 'NOT configured'})")
+            logger.debug(f"  - AWS_REGION: {settings.AWS_REGION}")
+        
         # Initialize AWS Textract if available
         if self.provider == "aws" and AWS_AVAILABLE:
             if settings.AWS_ACCESS_KEY_ID and settings.AWS_SECRET_ACCESS_KEY:
