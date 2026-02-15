@@ -6,6 +6,8 @@ import logging
 from app.core.config import settings
 from app.api import upload, query, documents
 from app.db.base import engine, Base
+# Import models to ensure they're registered with Base.metadata
+from app.db.models import Document, DocumentChunk  # noqa: F401
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path

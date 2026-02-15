@@ -36,6 +36,28 @@ class Settings(BaseSettings):
     BM25_WEIGHT: float = float(os.getenv("BM25_WEIGHT", "0.3"))
     ENABLE_RERANKING: bool = os.getenv("ENABLE_RERANKING", "false").lower() == "true"
     
+    # Cloud OCR Configuration
+    AWS_ACCESS_KEY_ID: str = os.getenv("AWS_ACCESS_KEY_ID", "")
+    AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+    AWS_REGION: str = os.getenv("AWS_REGION", "us-east-1")
+    AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT: str = os.getenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", "")
+    AZURE_DOCUMENT_INTELLIGENCE_KEY: str = os.getenv("AZURE_DOCUMENT_INTELLIGENCE_KEY", "")
+    
+    # OCR Settings
+    ENABLE_CLOUD_OCR: bool = os.getenv("ENABLE_CLOUD_OCR", "true").lower() == "true"
+    CLOUD_OCR_PROVIDER: str = os.getenv("CLOUD_OCR_PROVIDER", "aws")  # "aws" or "azure"
+    MAX_CLOUD_OCR_PAGES: int = int(os.getenv("MAX_CLOUD_OCR_PAGES", "100"))
+    CLOUD_OCR_MONTHLY_BUDGET: float = float(os.getenv("CLOUD_OCR_MONTHLY_BUDGET", "50.0"))
+    
+    # Vision API Settings
+    ENABLE_IMAGE_CAPTIONS: bool = os.getenv("ENABLE_IMAGE_CAPTIONS", "true").lower() == "true"
+    MAX_IMAGES_PER_DOCUMENT: int = int(os.getenv("MAX_IMAGES_PER_DOCUMENT", "20"))
+    IMAGE_CAPTION_MODEL: str = os.getenv("IMAGE_CAPTION_MODEL", "gpt-4o")
+    
+    # Advanced Chunking
+    PRESERVE_TABLES: bool = os.getenv("PRESERVE_TABLES", "true").lower() == "true"
+    PRESERVE_CODE_BLOCKS: bool = os.getenv("PRESERVE_CODE_BLOCKS", "true").lower() == "true"
+    
     @property
     def CORS_ORIGINS(self) -> List[str]:
         """Parse CORS_ORIGINS from string to list."""
