@@ -146,9 +146,12 @@ class DocumentIntelligenceService:
                     f"coverage={text_coverage:.2%}, pages={estimated_pages}, layout={layout_complexity}")
         logger.debug(f"[Strategy Decision] Cloud OCR enabled: {settings.ENABLE_CLOUD_OCR}, provider: {settings.CLOUD_OCR_PROVIDER}")
         
+        # Check if OCR is enabled at all (master switch)
+        ocr_enabled = settings.ENABLE_OCR
+        
         # Check if Cloud OCR is available and properly configured
         cloud_ocr_available = False
-        if settings.ENABLE_CLOUD_OCR:
+        if ocr_enabled and settings.ENABLE_CLOUD_OCR:
             # Check if credentials are configured
             if settings.CLOUD_OCR_PROVIDER.lower() == "aws":
                 cloud_ocr_available = bool(settings.AWS_ACCESS_KEY_ID and settings.AWS_SECRET_ACCESS_KEY)
@@ -158,9 +161,17 @@ class DocumentIntelligenceService:
             if not cloud_ocr_available:
                 logger.warning(f"[Strategy Decision] Cloud OCR enabled but credentials not configured for provider: {settings.CLOUD_OCR_PROVIDER}")
         
+        if not ocr_enabled:
+            logger.info("[Strategy Decision] OCR disabled globally (ENABLE_OCR=false), will use local parser only")
+        
         # Native digital formats always use local parser
         if file_type in ["docx", "html", "txt"]:
             logger.debug(f"[Strategy Decision] Native digital format → LOCAL_PARSER")
+            return ExtractionStrategy.LOCAL_PARSER
+        
+        # If OCR is disabled, always use local parser (even if text coverage is low)
+        if not ocr_enabled:
+            logger.debug(f"[Strategy Decision] OCR disabled → LOCAL_PARSER (will extract what's possible)")
             return ExtractionStrategy.LOCAL_PARSER
         
         # If Cloud OCR is available, prioritize it for:
@@ -186,32 +197,45 @@ class DocumentIntelligenceService:
             if cloud_ocr_available:
                 logger.debug(f"[Strategy Decision] Complex layout → CLOUD_OCR")
                 return ExtractionStrategy.CLOUD_OCR
-            else:
+            elif ocr_enabled:
                 logger.debug(f"[Strategy Decision] Complex layout → LOCAL_OCR (Cloud OCR not available)")
                 return ExtractionStrategy.LOCAL_OCR
+            else:
+                logger.debug(f"[Strategy Decision] Complex layout → LOCAL_PARSER (OCR disabled)")
+                return ExtractionStrategy.LOCAL_PARSER
         
-        # Low text coverage, small document → Local OCR
+        # Low text coverage, small document → Local OCR (if enabled)
         if text_coverage < 0.1 and estimated_pages < 5:
-            logger.debug(f"[Strategy Decision] Low coverage ({text_coverage:.2%}) + small doc ({estimated_pages} pages) → LOCAL_OCR")
-            return ExtractionStrategy.LOCAL_OCR
+            if ocr_enabled:
+                logger.debug(f"[Strategy Decision] Low coverage ({text_coverage:.2%}) + small doc → LOCAL_OCR")
+                return ExtractionStrategy.LOCAL_OCR
+            else:
+                logger.debug(f"[Strategy Decision] Low coverage ({text_coverage:.2%}) + small doc → LOCAL_PARSER (OCR disabled)")
+                return ExtractionStrategy.LOCAL_PARSER
         
         # Low text coverage, large document → Cloud OCR (cost-efficient) or Local OCR
         if text_coverage < 0.1 and estimated_pages >= 5:
             if cloud_ocr_available:
                 logger.debug(f"[Strategy Decision] Low coverage ({text_coverage:.2%}) + large doc ({estimated_pages} pages) → CLOUD_OCR")
                 return ExtractionStrategy.CLOUD_OCR
-            else:
+            elif ocr_enabled:
                 logger.debug(f"[Strategy Decision] Low coverage ({text_coverage:.2%}) + large doc ({estimated_pages} pages) → LOCAL_OCR")
                 return ExtractionStrategy.LOCAL_OCR
+            else:
+                logger.debug(f"[Strategy Decision] Low coverage ({text_coverage:.2%}) + large doc → LOCAL_PARSER (OCR disabled)")
+                return ExtractionStrategy.LOCAL_PARSER
         
         # Mixed coverage → Hybrid or Cloud OCR
         if 0.1 <= text_coverage < self.text_coverage_threshold:
             if cloud_ocr_available and layout_complexity != "simple":
                 logger.debug(f"[Strategy Decision] Mixed coverage ({text_coverage:.2%}) + {layout_complexity} layout → CLOUD_OCR")
                 return ExtractionStrategy.CLOUD_OCR
-            else:
+            elif ocr_enabled:
                 logger.debug(f"[Strategy Decision] Mixed coverage ({text_coverage:.2%}) → HYBRID")
                 return ExtractionStrategy.HYBRID
+            else:
+                logger.debug(f"[Strategy Decision] Mixed coverage ({text_coverage:.2%}) → LOCAL_PARSER (OCR disabled)")
+                return ExtractionStrategy.LOCAL_PARSER
         
         # Default to local parser
         logger.debug(f"[Strategy Decision] Default fallback → LOCAL_PARSER")

@@ -44,7 +44,8 @@ class Settings(BaseSettings):
     AZURE_DOCUMENT_INTELLIGENCE_KEY: str = os.getenv("AZURE_DOCUMENT_INTELLIGENCE_KEY", "")
     
     # OCR Settings
-    ENABLE_CLOUD_OCR: bool = os.getenv("ENABLE_CLOUD_OCR", "true").lower() == "true"
+    ENABLE_OCR: bool = os.getenv("ENABLE_OCR", "false").lower() == "true"  # Master switch for all OCR
+    ENABLE_CLOUD_OCR: bool = os.getenv("ENABLE_CLOUD_OCR", "false").lower() == "true"
     CLOUD_OCR_PROVIDER: str = os.getenv("CLOUD_OCR_PROVIDER", "aws")  # "aws" or "azure"
     MAX_CLOUD_OCR_PAGES: int = int(os.getenv("MAX_CLOUD_OCR_PAGES", "100"))
     CLOUD_OCR_MONTHLY_BUDGET: float = float(os.getenv("CLOUD_OCR_MONTHLY_BUDGET", "50.0"))

@@ -190,21 +190,23 @@ class CloudOCRService:
                 error_code = last_error.response.get('Error', {}).get('Code', 'Unknown') if last_error else 'Unknown'
                 error_msg = str(last_error) if last_error else 'Unknown error'
                 
-                # Check if it's a multi-page issue
+                # Log the reason for fallback (for debugging)
                 if 'UnsupportedDocumentException' in error_code or 'UnsupportedDocumentException' in error_msg:
-                    raise ValueError(
-                        f"AWS Textract sync APIs only support single-page documents. "
-                        f"This PDF appears to have multiple pages ({file_size_mb:.2f} MB). "
-                        f"Options: 1) Use local OCR (automatic fallback), "
-                        f"2) Split PDF into single pages, or "
-                        f"3) Use async Textract API with S3 (requires additional setup)."
+                    logger.warning(
+                        f"[Cloud OCR/Textract] Document appears to be multi-page or unsupported format. "
+                        f"Textract sync APIs only support single-page documents. "
+                        f"Size: {file_size_mb:.2f} MB. "
+                        f"Falling back to local OCR automatically."
                     )
                 else:
-                    raise ValueError(
-                        f"AWS Textract cannot process this document ({error_code}): {error_msg}. "
-                        f"Document size: {file_size_mb:.2f} MB. "
-                        f"Falling back to local OCR."
+                    logger.warning(
+                        f"[Cloud OCR/Textract] Cannot process document ({error_code}): {error_msg}. "
+                        f"Size: {file_size_mb:.2f} MB. "
+                        f"Falling back to local OCR automatically."
                     )
+                
+                # Raise a simple exception that will trigger automatic fallback
+                raise ValueError("Cloud OCR cannot process this document, falling back to local OCR")
             
             # Parse response
             extracted = self._parse_textract_response(response)

@@ -39,7 +39,8 @@ services:
       BM25_WEIGHT: ${BM25_WEIGHT:-0.3}
       ENABLE_RERANKING: ${ENABLE_RERANKING:-false}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
-      # Cloud OCR Configuration
+      # OCR Configuration (Master switch - set to false to disable all OCR for MVP)
+      ENABLE_OCR: ${ENABLE_OCR:-false}
       ENABLE_CLOUD_OCR: ${ENABLE_CLOUD_OCR:-false}
       CLOUD_OCR_PROVIDER: ${CLOUD_OCR_PROVIDER:-aws}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}

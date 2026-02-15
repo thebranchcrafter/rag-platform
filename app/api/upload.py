@@ -388,17 +388,19 @@ async def upload_document(
             
             elif analysis.strategy == ExtractionStrategy.CLOUD_OCR:
                 if not settings.ENABLE_CLOUD_OCR:
-                    logger.warning("[Upload Pipeline] Cloud OCR disabled in config, falling back to local OCR")
+                    logger.info("[Upload Pipeline] Cloud OCR disabled in config, using local OCR")
                     extractor = LocalOCRService()
                     extracted_content = await extractor.extract(file_path, file_type)
                 else:
-                    logger.info("[Upload Pipeline] Using Cloud OCR service")
+                    logger.info("[Upload Pipeline] Attempting Cloud OCR service")
                     try:
                         extractor = CloudOCRService()
                         extracted_content = await extractor.extract(file_path, file_type)
                         logger.info("[Upload Pipeline] Cloud OCR extraction successful")
                     except Exception as e:
-                        logger.warning(f"[Upload Pipeline] Cloud OCR failed: {str(e)}, falling back to local OCR")
+                        # Silently fallback to local OCR - this is expected for multi-page docs
+                        logger.info(f"[Upload Pipeline] Cloud OCR not available for this document, using local OCR instead")
+                        logger.debug(f"[Upload Pipeline] Cloud OCR error details: {str(e)}")
                         extractor = LocalOCRService()
                         extracted_content = await extractor.extract(file_path, file_type)
             
@@ -429,11 +431,16 @@ async def upload_document(
             logger.info("[Upload Pipeline] Phase 3: Image Processing")
             image_captions = []
             
-            # Skip image processing if we used Cloud OCR (it already extracts text from images)
+            # Skip image processing if:
+            # 1. OCR is disabled (for MVP, skip image processing)
+            # 2. We used Cloud OCR (it already extracts text from images)
             used_cloud_ocr = (analysis.strategy == ExtractionStrategy.CLOUD_OCR and 
                             settings.ENABLE_CLOUD_OCR)
+            ocr_disabled = not settings.ENABLE_OCR
             
-            if used_cloud_ocr:
+            if ocr_disabled:
+                logger.info("[Upload Pipeline] Phase 3 skipped: OCR disabled (ENABLE_OCR=false) - image processing disabled for MVP")
+            elif used_cloud_ocr:
                 logger.info("[Upload Pipeline] Phase 3 skipped: Cloud OCR already extracted text from images")
             elif file_type == "pdf" or analysis.requires_vision:
                 # Only process images if not using Cloud OCR (which handles images automatically)
