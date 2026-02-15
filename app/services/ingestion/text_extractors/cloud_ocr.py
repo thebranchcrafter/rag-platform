@@ -121,20 +121,34 @@ class CloudOCRService:
         file_path: str,
         pages: Optional[List[int]] = None
     ) -> ExtractedContent:
-        """Extract text using AWS Textract."""
+        """Extract text using AWS Textract (async API for better performance)."""
         try:
+            from botocore.exceptions import ClientError
+            
             with open(file_path, 'rb') as f:
                 document_bytes = f.read()
             
-            # Call Textract
-            # Note: Textract doesn't support page selection in basic API
-            # For page selection, would need to use async API
-            response = self.textract_client.detect_document_text(
-                Document={'Bytes': document_bytes}
-            )
+            file_size_mb = len(document_bytes) / (1024 * 1024)
+            logger.info(f"[Cloud OCR/Textract] Processing document ({file_size_mb:.2f} MB)")
+            
+            # Use async API for documents > 1MB or multi-page documents
+            # This is more efficient and handles large documents better
+            if file_size_mb > 1.0 or pages is None:
+                logger.info("[Cloud OCR/Textract] Using async API (AnalyzeDocument) for better performance")
+                response = self.textract_client.analyze_document(
+                    Document={'Bytes': document_bytes},
+                    FeatureTypes=['TABLES', 'FORMS']  # Extract tables and forms
+                )
+            else:
+                logger.info("[Cloud OCR/Textract] Using sync API (DetectDocumentText)")
+                response = self.textract_client.detect_document_text(
+                    Document={'Bytes': document_bytes}
+                )
             
             # Parse response
             extracted = self._parse_textract_response(response)
+            
+            logger.info(f"[Cloud OCR/Textract] Extraction complete: {len(extracted['text'])} chars, {len(extracted.get('tables', []))} tables")
             
             return ExtractedContent(
                 text=extracted['text'],
@@ -142,14 +156,19 @@ class CloudOCRService:
                 metadata={
                     "extraction_method": "aws_textract",
                     "provider": "aws",
-                    "blocks_count": len(response.get('Blocks', []))
+                    "blocks_count": len(response.get('Blocks', [])),
+                    "file_size_mb": file_size_mb
                 },
                 confidence=extracted.get('confidence', 0.95),
                 pages_processed=extracted.get('pages', 1)
             )
         
+        except ClientError as e:
+            error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+            logger.error(f"[Cloud OCR/Textract] AWS error ({error_code}): {str(e)}")
+            raise
         except Exception as e:
-            logger.error(f"Textract extraction failed: {str(e)}")
+            logger.error(f"[Cloud OCR/Textract] Extraction failed: {str(e)}", exc_info=True)
             raise
     
     async def _extract_with_azure(
@@ -189,22 +208,84 @@ class CloudOCRService:
             raise
     
     def _parse_textract_response(self, response: Dict) -> Dict[str, Any]:
-        """Parse AWS Textract response."""
+        """Parse AWS Textract response, including tables."""
         blocks = response.get('Blocks', [])
         
-        # Extract text blocks
-        text_blocks = [b for b in blocks if b['BlockType'] == 'LINE']
-        text = '\n'.join(b['Text'] for b in text_blocks)
+        # Build block map for relationships
+        block_map = {b['Id']: b for b in blocks}
         
-        # Extract tables (simplified)
+        # Extract text from LINE blocks
+        text_blocks = [b for b in blocks if b['BlockType'] == 'LINE']
+        text_lines = []
+        current_page = 1
+        
+        for block in text_blocks:
+            page = block.get('Page', current_page)
+            if page != current_page:
+                text_lines.append(f"\n[Página {page}]\n")
+                current_page = page
+            text_lines.append(block['Text'])
+        
+        text = '\n'.join(text_lines)
+        
+        # Extract tables (Textract provides table structure)
         tables = []
-        # Textract tables are complex, would need more parsing
+        table_blocks = [b for b in blocks if b['BlockType'] == 'TABLE']
+        
+        for table_block in table_blocks:
+            table_data = []
+            relationships = table_block.get('Relationships', [])
+            
+            # Get all cells in this table
+            cell_ids = []
+            for rel in relationships:
+                if rel['Type'] == 'CHILD':
+                    cell_ids.extend(rel.get('Ids', []))
+            
+            # Extract cell data
+            cells = {}
+            for cell_id in cell_ids:
+                cell = block_map.get(cell_id)
+                if cell and cell['BlockType'] == 'CELL':
+                    row_index = cell.get('RowIndex', 0)
+                    col_index = cell.get('ColumnIndex', 0)
+                    cell_text = ""
+                    
+                    # Get text from cell's children
+                    cell_rels = cell.get('Relationships', [])
+                    for rel in cell_rels:
+                        if rel['Type'] == 'CHILD':
+                            for child_id in rel.get('Ids', []):
+                                child = block_map.get(child_id)
+                                if child and child['BlockType'] == 'WORD':
+                                    cell_text += child.get('Text', '') + ' '
+                    
+                    if (row_index, col_index) not in cells:
+                        cells[(row_index, col_index)] = cell_text.strip()
+            
+            # Convert to table structure (list of rows)
+            if cells:
+                max_row = max(r for r, c in cells.keys())
+                max_col = max(c for r, c in cells.keys())
+                
+                table_rows = []
+                for row in range(1, max_row + 1):
+                    table_row = []
+                    for col in range(1, max_col + 1):
+                        table_row.append(cells.get((row, col), ''))
+                    table_rows.append(table_row)
+                
+                if table_rows:
+                    tables.append(table_rows)
+                    logger.debug(f"[Cloud OCR/Textract] Extracted table with {len(table_rows)} rows, {len(table_rows[0]) if table_rows else 0} columns")
+        
+        pages = len(set(b.get('Page', 1) for b in blocks))
         
         return {
             'text': text,
             'tables': tables,
             'confidence': 0.95,
-            'pages': len(set(b.get('Page', 1) for b in blocks))
+            'pages': pages
         }
     
     def _parse_azure_response(self, result) -> Dict[str, Any]:

@@ -392,10 +392,15 @@ async def upload_document(
                     extractor = LocalOCRService()
                     extracted_content = await extractor.extract(file_path, file_type)
                 else:
-                    # For now, queue for async processing or use local OCR as fallback
-                    logger.warning("[Upload Pipeline] Cloud OCR not fully implemented, using local OCR as fallback")
-                    extractor = LocalOCRService()
-                    extracted_content = await extractor.extract(file_path, file_type)
+                    logger.info("[Upload Pipeline] Using Cloud OCR service")
+                    try:
+                        extractor = CloudOCRService()
+                        extracted_content = await extractor.extract(file_path, file_type)
+                        logger.info("[Upload Pipeline] Cloud OCR extraction successful")
+                    except Exception as e:
+                        logger.warning(f"[Upload Pipeline] Cloud OCR failed: {str(e)}, falling back to local OCR")
+                        extractor = LocalOCRService()
+                        extracted_content = await extractor.extract(file_path, file_type)
             
             elif analysis.strategy == ExtractionStrategy.HYBRID:
                 logger.info("[Upload Pipeline] Using Hybrid extraction (local parser + OCR)")
@@ -424,10 +429,17 @@ async def upload_document(
             logger.info("[Upload Pipeline] Phase 3: Image Processing")
             image_captions = []
             
-            # Always try to process images for PDFs (they might have content in images)
-            if file_type == "pdf" or analysis.requires_vision:
+            # Skip image processing if we used Cloud OCR (it already extracts text from images)
+            used_cloud_ocr = (analysis.strategy == ExtractionStrategy.CLOUD_OCR and 
+                            settings.ENABLE_CLOUD_OCR)
+            
+            if used_cloud_ocr:
+                logger.info("[Upload Pipeline] Phase 3 skipped: Cloud OCR already extracted text from images")
+            elif file_type == "pdf" or analysis.requires_vision:
+                # Only process images if not using Cloud OCR (which handles images automatically)
                 try:
                     logger.info(f"[Upload Pipeline] Processing images (file_type={file_type}, requires_vision={analysis.requires_vision})")
+                    logger.info("[Upload Pipeline] Note: Consider using Cloud OCR (AWS Textract/Azure) for better performance on low-resource servers")
                     image_processor = ImageProcessor()
                     image_captions = await image_processor.extract_and_caption_images(
                         file_path, file_type
