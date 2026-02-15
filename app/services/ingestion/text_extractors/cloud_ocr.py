@@ -130,29 +130,81 @@ class CloudOCRService:
         file_path: str,
         pages: Optional[List[int]] = None
     ) -> ExtractedContent:
-        """Extract text using AWS Textract (async API for better performance)."""
+        """Extract text using AWS Textract."""
         try:
+            import asyncio
             from botocore.exceptions import ClientError
+            import time
             
             with open(file_path, 'rb') as f:
                 document_bytes = f.read()
             
             file_size_mb = len(document_bytes) / (1024 * 1024)
-            logger.info(f"[Cloud OCR/Textract] Processing document ({file_size_mb:.2f} MB)")
+            file_size_kb = len(document_bytes) / 1024
+            logger.info(f"[Cloud OCR/Textract] Processing document ({file_size_mb:.2f} MB, {file_size_kb:.2f} KB)")
             
-            # Use async API for documents > 1MB or multi-page documents
-            # This is more efficient and handles large documents better
-            if file_size_mb > 1.0 or pages is None:
-                logger.info("[Cloud OCR/Textract] Using async API (AnalyzeDocument) for better performance")
-                response = self.textract_client.analyze_document(
-                    Document={'Bytes': document_bytes},
-                    FeatureTypes=['TABLES', 'FORMS']  # Extract tables and forms
-                )
-            else:
-                logger.info("[Cloud OCR/Textract] Using sync API (DetectDocumentText)")
-                response = self.textract_client.detect_document_text(
-                    Document={'Bytes': document_bytes}
-                )
+            # AWS Textract limits:
+            # - Synchronous APIs (detect_document_text, analyze_document): Max 5MB, single page
+            # - Asynchronous APIs (start_document_text_detection, start_document_analysis): Up to 500MB, multi-page
+            
+            # AWS Textract sync APIs only support single-page documents
+            # For multi-page PDFs, we need async API (requires S3)
+            # Try detect_document_text first (most compatible, single page only)
+            # Then try analyze_document if detect_document_text works
+            
+            response = None
+            last_error = None
+            
+            # Strategy 1: Try detect_document_text (most compatible, but no tables)
+            if file_size_kb <= 5000:  # 5MB limit for sync API
+                try:
+                    logger.info("[Cloud OCR/Textract] Attempting detect_document_text (most compatible)")
+                    response = self.textract_client.detect_document_text(
+                        Document={'Bytes': document_bytes}
+                    )
+                    logger.info("[Cloud OCR/Textract] detect_document_text succeeded")
+                except ClientError as e1:
+                    error_code1 = e1.response.get('Error', {}).get('Code', 'Unknown')
+                    last_error = e1
+                    logger.warning(f"[Cloud OCR/Textract] detect_document_text failed ({error_code1}): {str(e1)}")
+                    
+                    # Strategy 2: Try analyze_document (supports tables, but more strict)
+                    if error_code1 in ['UnsupportedDocumentException', 'InvalidParameterException']:
+                        try:
+                            logger.info("[Cloud OCR/Textract] Trying analyze_document (supports tables)")
+                            response = self.textract_client.analyze_document(
+                                Document={'Bytes': document_bytes},
+                                FeatureTypes=['TABLES', 'FORMS']
+                            )
+                            logger.info("[Cloud OCR/Textract] analyze_document succeeded")
+                        except ClientError as e2:
+                            error_code2 = e2.response.get('Error', {}).get('Code', 'Unknown')
+                            last_error = e2
+                            logger.error(f"[Cloud OCR/Textract] analyze_document also failed ({error_code2}): {str(e2)}")
+            
+            # If both sync APIs failed, the document might be:
+            # 1. Multi-page (sync APIs only support single page)
+            # 2. Too large (>5MB)
+            # 3. Corrupted or unsupported format
+            if response is None:
+                error_code = last_error.response.get('Error', {}).get('Code', 'Unknown') if last_error else 'Unknown'
+                error_msg = str(last_error) if last_error else 'Unknown error'
+                
+                # Check if it's a multi-page issue
+                if 'UnsupportedDocumentException' in error_code or 'UnsupportedDocumentException' in error_msg:
+                    raise ValueError(
+                        f"AWS Textract sync APIs only support single-page documents. "
+                        f"This PDF appears to have multiple pages ({file_size_mb:.2f} MB). "
+                        f"Options: 1) Use local OCR (automatic fallback), "
+                        f"2) Split PDF into single pages, or "
+                        f"3) Use async Textract API with S3 (requires additional setup)."
+                    )
+                else:
+                    raise ValueError(
+                        f"AWS Textract cannot process this document ({error_code}): {error_msg}. "
+                        f"Document size: {file_size_mb:.2f} MB. "
+                        f"Falling back to local OCR."
+                    )
             
             # Parse response
             extracted = self._parse_textract_response(response)
@@ -174,8 +226,21 @@ class CloudOCRService:
         
         except ClientError as e:
             error_code = e.response.get('Error', {}).get('Code', 'Unknown')
-            logger.error(f"[Cloud OCR/Textract] AWS error ({error_code}): {str(e)}")
-            raise
+            error_msg = str(e)
+            logger.error(f"[Cloud OCR/Textract] AWS error ({error_code}): {error_msg}")
+            
+            # Provide helpful error messages
+            if error_code == 'UnsupportedDocumentException':
+                raise ValueError(f"AWS Textract: Document format not supported. "
+                               f"Textract supports PDF, PNG, JPEG, TIFF. "
+                               f"Document size: {file_size_mb:.2f} MB. "
+                               f"Try using local OCR instead.")
+            elif error_code == 'InvalidParameterException':
+                raise ValueError(f"AWS Textract: Invalid document parameters. "
+                               f"Document may be corrupted or too large for sync API. "
+                               f"Size: {file_size_mb:.2f} MB")
+            else:
+                raise ValueError(f"AWS Textract error ({error_code}): {error_msg}")
         except Exception as e:
             logger.error(f"[Cloud OCR/Textract] Extraction failed: {str(e)}", exc_info=True)
             raise
